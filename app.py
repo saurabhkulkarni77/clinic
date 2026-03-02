@@ -48,6 +48,48 @@ if st.session_state["authentication_status"]:
     # Internal Patient Database (Session State)
     if "db" not in st.session_state:
         st.session_state.db = []
+    if "analysis_target" not in st.session_state:
+        st.session_state.analysis_target = None
+
+    # ─────────────────────────────────────────
+    # Helper: build a rich prompt from patient data
+    # ─────────────────────────────────────────
+    def build_analysis_prompt(patient: dict) -> str:
+        lines = [
+            "You are a highly experienced physiotherapist. Perform a comprehensive clinical analysis for the following patient and provide:",
+            "1. Anatomical analysis of the pain area",
+            "2. Likely diagnoses / differential diagnoses",
+            "3. Red flags or urgent referral criteria",
+            "4. Recommended physiotherapy treatment plan (exercises, modalities, frequency)",
+            "5. Expected prognosis and recovery timeline",
+            "6. Any lifestyle or self-management advice",
+            "",
+            "--- PATIENT PROFILE ---",
+            f"Name: {patient.get('name', 'Unknown')}",
+        ]
+        if patient.get("dob"):
+            lines.append(f"Date of Birth: {patient['dob']}")
+        if patient.get("gender"):
+            lines.append(f"Gender: {patient['gender']}")
+        lines += [
+            f"Pain Location / Area: {patient.get('location', 'Not specified')}",
+            f"Pain Severity (VAS 0–10): {patient.get('level', 'Not specified')}",
+        ]
+        if patient.get("duration"):
+            lines.append(f"Duration of Condition: {patient['duration']}")
+        if patient.get("referral"):
+            lines.append(f"Referral Source: {patient['referral']}")
+        if patient.get("session"):
+            lines.append(f"Session Type Requested: {patient['session']}")
+        if patient.get("therapist"):
+            lines.append(f"Assigned Therapist: {patient['therapist']}")
+        if patient.get("notes"):
+            lines.append(f"Patient's Additional Notes / Symptoms: {patient['notes']}")
+        lines.append(f"Appointment Date: {patient.get('date', 'Not specified')}")
+        lines.append(f"Appointment Time: {patient.get('time', 'Not specified')}")
+        lines.append("")
+        lines.append("Please structure your response with clear headings for each section above.")
+        return "\n".join(lines)
 
     # ─────────────────────────────────────────
     # PAGE 1: Pain Analysis
@@ -55,24 +97,37 @@ if st.session_state["authentication_status"]:
     if page == "🩺 Pain Analysis":
         st.title("🩺 Pain Severity & Anatomy Agent")
 
-        severity = st.slider("Select Pain Severity (VAS)", 1, 10, 5)
-        location = st.text_input("Anatomical Location")
+        # If triggered from Schedule page, pre-populate with that patient
+        if st.session_state.analysis_target is not None:
+            patient = st.session_state.analysis_target
+            st.info(f"📋 Analysing booked patient: **{patient.get('name')}** — {patient.get('location')} (VAS {patient.get('level')})")
+            if st.button("🔍 Run Full Analysis for This Patient"):
+                with st.spinner("Generating comprehensive clinical analysis..."):
+                    prompt = build_analysis_prompt(patient)
+                    response = model.generate_content(prompt)
+                    st.markdown(response.text)
+            if st.button("✖ Clear & Start Fresh"):
+                st.session_state.analysis_target = None
+                st.rerun()
+        else:
+            severity = st.slider("Select Pain Severity (VAS)", 1, 10, 5)
+            location = st.text_input("Anatomical Location")
 
-        if st.button("Analyze"):
-            with st.spinner("Analyzing..."):
-                response = model.generate_content(
-                    f"Analyze pain level {severity} at {location} for anatomy and red flags."
-                )
-                st.markdown(response.text)
-                st.session_state.db.append({
-                    "name": "New Patient",
-                    "level": severity,
-                    "location": location,
-                    "date": str(date.today()),
-                    "time": "",
-                    "phone": "",
-                    "status": "Walk-in"
-                })
+            if st.button("Analyze"):
+                with st.spinner("Analyzing..."):
+                    new_patient = {
+                        "name": "Walk-in Patient",
+                        "level": severity,
+                        "location": location,
+                        "date": str(date.today()),
+                        "time": "",
+                        "phone": "",
+                        "status": "Walk-in"
+                    }
+                    prompt = build_analysis_prompt(new_patient)
+                    response = model.generate_content(prompt)
+                    st.markdown(response.text)
+                    st.session_state.db.append(new_patient)
 
     # ─────────────────────────────────────────
     # PAGE 2: Book Appointment
@@ -178,26 +233,62 @@ if st.session_state["authentication_status"]:
             with col2:
                 show_all = st.checkbox("Show all appointments", value=True)
 
-            display_data = []
-            for entry in st.session_state.db:
-                if show_all or entry.get("date") == str(filter_date):
-                    display_data.append({
-                        "Patient": entry.get("name", "N/A"),
-                        "Date": entry.get("date", "N/A"),
-                        "Time": entry.get("time", "N/A"),
-                        "Area": entry.get("location", "N/A"),
-                        "Pain (VAS)": entry.get("level", "N/A"),
-                        "Session": entry.get("session", "N/A"),
-                        "Therapist": entry.get("therapist", "N/A"),
-                        "Status": entry.get("status", "N/A"),
-                    })
+            filtered = [
+                e for e in st.session_state.db
+                if show_all or e.get("date") == str(filter_date)
+            ]
 
-            if display_data:
-                st.dataframe(display_data, use_container_width=True)
-                st.caption(f"Total appointments: {len(display_data)}")
+            if filtered:
+                st.caption(f"Total appointments: {len(filtered)}")
+                for i, entry in enumerate(filtered):
+                    with st.expander(
+                        f"👤 {entry.get('name', 'N/A')}  |  📅 {entry.get('date', '')}  {entry.get('time', '')}  |  🦴 {entry.get('location', 'N/A')}  |  VAS {entry.get('level', '?')}",
+                        expanded=False
+                    ):
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.markdown(f"**Gender:** {entry.get('gender', 'N/A')}")
+                            st.markdown(f"**DOB:** {entry.get('dob', 'N/A')}")
+                            st.markdown(f"**Phone:** {entry.get('phone', 'N/A')}")
+                            st.markdown(f"**Email:** {entry.get('email', 'N/A')}")
+                        with col_b:
+                            st.markdown(f"**Pain Area:** {entry.get('location', 'N/A')}")
+                            st.markdown(f"**VAS:** {entry.get('level', 'N/A')}")
+                            st.markdown(f"**Duration:** {entry.get('duration', 'N/A')}")
+                            st.markdown(f"**Referral:** {entry.get('referral', 'N/A')}")
+                        with col_c:
+                            st.markdown(f"**Session:** {entry.get('session', 'N/A')}")
+                            st.markdown(f"**Therapist:** {entry.get('therapist', 'N/A')}")
+                            st.markdown(f"**Status:** {entry.get('status', 'N/A')}")
+                        if entry.get("notes"):
+                            st.markdown(f"**Notes:** {entry['notes']}")
+
+                        # Inline AI analysis
+                        btn_key = f"analyse_{i}"
+                        result_key = f"result_{i}"
+                        if result_key not in st.session_state:
+                            st.session_state[result_key] = None
+
+                        col_btn1, col_btn2 = st.columns([2, 1])
+                        with col_btn1:
+                            if st.button(f"🧠 Run AI Clinical Analysis", key=btn_key):
+                                with st.spinner("Generating clinical analysis using all patient data..."):
+                                    prompt = build_analysis_prompt(entry)
+                                    response = model.generate_content(prompt)
+                                    st.session_state[result_key] = response.text
+                        with col_btn2:
+                            if st.button("📤 Open in Analysis Page", key=f"open_{i}"):
+                                st.session_state.analysis_target = entry
+                                st.rerun()
+
+                        if st.session_state[result_key]:
+                            st.divider()
+                            st.markdown("#### 🧠 AI Clinical Analysis")
+                            st.markdown(st.session_state[result_key])
             else:
                 st.info("No appointments found for the selected date.")
 
+            st.divider()
             if st.button("🗑️ Clear All Appointments", type="secondary"):
                 st.session_state.db = []
                 st.rerun()
