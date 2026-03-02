@@ -33,7 +33,7 @@ def run_clinical_audit(report_text):
 if authentication_status:
     authenticator.logout("Logout", "sidebar")
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-2.0-flash') # Using the latest Flash model
+    model = genai.GenerativeModel('gemini-2.5-flash') # Using the latest Flash model
 
     st.title("🌡️ Physiotherapy & Pyrotherapy Diagnostic Agent")
     st.markdown("### Clinical Assessment & Treatment Planning")
