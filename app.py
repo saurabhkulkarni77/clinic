@@ -1,89 +1,68 @@
 import streamlit as st
 import google.generativeai as genai
 import streamlit_authenticator as stauth
-import pandas as pd
-from datetime import datetime, time
+import yaml
+from yaml.loader import SafeLoader
 
-# --- 1. Session State Initialization ---
-if "patient_db" not in st.session_state:
-    st.session_state.patient_db = []
+# --- 1. CRITICAL: Initialize session state first ---
+if "authentication_status" not in st.session_state:
+    st.session_state["authentication_status"] = None
 
-# --- 2. Main App Logic ---
-if st.session_state.get("authentication_status"):
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-2.5-flash')
+# --- 2. Load Secrets with Error Handling ---
+try:
+    credentials = st.secrets["credentials"].to_dict()
+    cookie = st.secrets["cookie"].to_dict()
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception as e:
+    st.error(f"❌ Configuration Error: {e}")
+    st.info("Ensure your Streamlit Cloud Secrets has: [credentials], [cookie], and GEMINI_API_KEY")
+    st.stop()
 
-    st.sidebar.title(f"Dr. {st.session_state.name}'s Portal")
-    page = st.sidebar.radio("Navigate", ["Clinical Assessment", "Patient Schedule"])
+# --- 3. Authenticator Setup ---
+authenticator = stauth.Authenticate(
+    credentials,
+    cookie['name'],
+    cookie['key'],
+    cookie['expiry_days']
+)
 
-    # --- PAGE 1: CLINICAL ASSESSMENT ---
-    if page == "Clinical Assessment":
-        st.header("🩺 Anatomical Diagnostic & Pain Assessment")
+# Render Login Widget
+try:
+    authenticator.login()
+except Exception as e:
+    st.error(f"Login Widget Error: {e}")
+
+# --- 4. Main App Routing ---
+if st.session_state["authentication_status"]:
+    authenticator.logout('Logout', 'sidebar')
+    st.sidebar.write(f'Welcome *{st.session_state["name"]}*')
+    
+    # Configure AI
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+    st.title("🩺 Pain Severity & Anatomy Agent")
+    
+    # Internal Patient Database (Session State)
+    if "db" not in st.session_state:
+        st.session_state.db = []
+
+    # UI Logic
+    severity = st.slider("Select Pain Severity (VAS)", 1, 10, 5)
         
-        with st.form("assessment_form"):
-            p_name = st.text_input("Patient Name")
-            
-            # Pain Severity Scale (Replacing Heat Tolerance)
-            st.write("### Subjective Pain Severity (VAS)")
-            pain_level = st.slider("Select Pain Level (1 = Minimal, 10 = Emergency)", 1, 10, 5)
-            
-            pain_type = st.multiselect("Pain Quality", 
-                ["Sharp/Stabbing", "Dull/Aching", "Burning", "Electrical", "Throbbing"])
-            
-            symptoms = st.text_area("Anatomical Location & Symptoms (e.g., Left side L5 radiating to lateral calf)")
-            
-            submitted = st.form_submit_button("Generate Clinical Analysis")
-            
-            if submitted:
-                with st.spinner("Analyzing Pathophysiology..."):
-                    # Prompting the AI to focus on Anatomy, Physiology, and Pain Severity
-                    prompt = f"""
-                    Act as a Senior Physiotherapist. 
-                    Patient: {p_name}
-                    Pain Severity: {pain_level}/10
-                    Pain Quality: {', '.join(pain_type)}
-                    Location/Symptoms: {symptoms}
+    location = st.text_input("Anatomical Location")
+    
+    if st.button("Analyze"):
+        with st.spinner("Analyzing..."):
+            response = model.generate_content(f"Analyze pain level {severity} at {location} for anatomy and red flags.")
+            st.markdown(response.text)
+            st.session_state.db.append({"name": "New Patient", "level": severity, "date": "2026-03-01"})
 
-                    Provide a professional assessment based on:
-                    1. ANATOMY: Likely structures involved (muscles, nerves, ligaments).
-                    2. PHYSIOLOGY: Explain the pain mechanism (e.g., Peripheral sensitization, Ischemia, Nerve Compression).
-                    3. CLINICAL TESTS: 3 physical tests to confirm the diagnosis.
-                    4. URGENCY: Based on a pain level of {pain_level}, what are the immediate red flags to check for?
-                    """
-                    response = model.generate_content(prompt)
-                    st.session_state.last_assessment = response.text
-                    
-                    st.session_state.patient_db.append({
-                        "Name": p_name,
-                        "Date": datetime.now().strftime("%Y-%m-%d"),
-                        "Pain Level": f"{pain_level}/10",
-                        "Assessment": response.text,
-                        "Status": "Evaluated"
-                    })
+    if st.session_state.db:
+        st.subheader("Internal Schedule")
+        st.table(st.session_state.db)
 
-        if "last_assessment" in st.session_state:
-            st.markdown("---")
-            st.markdown(st.session_state.last_assessment)
-
-    # --- PAGE 2: PATIENT SCHEDULE ---
-    elif page == "Patient Schedule":
-        st.header("📅 Patient Management")
-        
-        if st.session_state.patient_db:
-            df = pd.DataFrame(st.session_state.patient_db)
-            
-            # Allow scheduling for evaluated patients
-            st.subheader("Schedule Follow-up")
-            p_list = [p["Name"] for p in st.session_state.patient_db]
-            selected_p = st.selectbox("Select Patient", p_list)
-            appt_date = st.date_input("Date")
-            appt_time = st.time_input("Time", time(9, 0))
-            
-            if st.button("Book Appointment"):
-                st.success(f"Confirmed: {selected_p} on {appt_date} at {appt_time}")
-            
-            st.markdown("---")
-            st.subheader("Patient Records & Pain History")
-            st.dataframe(df[["Name", "Date", "Pain Level", "Status"]])
-        else:
-            st.info("No assessments recorded yet.")
+elif st.session_state["authentication_status"] is False:
+    st.error('Username/password is incorrect')
+elif st.session_state["authentication_status"] is None:
+    st.warning('Please enter your username and password')
